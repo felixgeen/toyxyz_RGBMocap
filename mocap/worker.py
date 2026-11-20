@@ -133,7 +133,7 @@ def emit(kind: str, **data) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("stage", choices=["diagnose", "prepare", "download", "import_model", "mesh", "rig", "save_fbx", "track", "pva", "features", "gvhmr", "refine", "footmr", "handflow", "correct", "export", "people", "person", 'flow_camera','flow_features','flowhmr','flow_export','exmr_preprocess','exmr_features','exmr'])
+    parser.add_argument("stage", choices=["diagnose", "prepare", "download", "import_model", "mesh", "rig", "save_fbx", "track", "pva", "features", "gvhmr", "refine", "footmr", "handflow", "correct", "export", "people", "person", 'flow_camera','flow_features','flowhmr','flow_export','exmr_preprocess','exmr_features','exmr','scene_import'])
     parser.add_argument("--project", type=Path)
     parser.add_argument("--video", type=Path)
     parser.add_argument("--start", type=float, default=0)
@@ -182,6 +182,9 @@ def main() -> int:
                 manifest['exmr_options']=options(json.loads(os.environ.get('RGB_MOCAP_EXMR_OPTIONS','{}')))
             if args.motion_tool:
                 manifest.setdefault('pipeline',{})['model']=args.motion_tool
+            scene=os.environ.get('RGB_MOCAP_SCENE_IMPORT','')
+            if scene:manifest['scene_import']=json.loads(scene)
+            else:manifest.pop('scene_import',None)
             if args.result != "auto":
                 manifest["pipeline"] = {"model": args.motion_tool or "gvhmr", "result": args.result,
                                         "htd_refine": result_options(args.result)[0], "footmr": result_options(args.result)[1], 'handflow':has_handflow(args.result)}
@@ -208,6 +211,10 @@ def main() -> int:
             return 0
         project = args.project.resolve()
         require_supported_project(project)
+        if args.stage=='scene_import':
+            from .scene_import.reader import run_stage as import_scene
+            import_scene(project,emit)
+            return 0
         if require_supported_project(project).key=='exmr' and args.stage not in ('exmr_preprocess','exmr_features','exmr','people','person','track','rig','mesh','export','correct'):
             raise ValueError('This stage is not compatible with ExMR. Its original prediction has been preserved.')
         if require_supported_project(project).key=='exmr' and args.stage.startswith('exmr'):

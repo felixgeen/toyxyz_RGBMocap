@@ -31,6 +31,7 @@ STAGES = {"prepare": "Prepare Video", "track": "Track Actor", "pva": "Analyze 2D
 
 from .theme import STYLE
 STAGES["mesh"] = "Prepare SMPL-X Mesh"
+STAGES["scene_import"] = "Import Scene"
 STAGES['rig']='Prepare Bone Preview'
 STAGES['save_fbx']='Save FBX'
 STAGES['stream_reference']='Export Live Link Reference Rig'
@@ -577,10 +578,11 @@ class ModelsDialog(QDialog):
 from .character_ui import CharacterWorkspace
 from .mamma_ui import MammaWorkspace
 from .prompthmr_ui import PromptHMRWorkspace
+from .scene_import_ui import SceneImportWorkspace
 from .pear_ui import PearWorkspace
 from .preview_export_ui import PreviewExportWorkspace
 
-class MainWindow(PreviewExportWorkspace,PearWorkspace,GemXWorkspace,PromptHMRWorkspace,MammaWorkspace,CharacterWorkspace,ModelWorkspace,ProjectSaving,PeopleWorkspace,StreamWorkspace,FaceWorkspace,QMainWindow):
+class MainWindow(SceneImportWorkspace,PreviewExportWorkspace,PearWorkspace,GemXWorkspace,PromptHMRWorkspace,MammaWorkspace,CharacterWorkspace,ModelWorkspace,ProjectSaving,PeopleWorkspace,StreamWorkspace,FaceWorkspace,QMainWindow):
     def __init__(self, video: Path | None = None):
         super().__init__()
         self.setWindowTitle("RGB MoCap | Motion Workspace")
@@ -1360,7 +1362,12 @@ class MainWindow(PreviewExportWorkspace,PearWorkspace,GemXWorkspace,PromptHMRWor
         correction=self.motion_correction.isChecked()
         if correction:self.save_correction_options()
         hand=tool.key=='gvhmr' and self.handflow_refine.isChecked()
-        self.input_jobs(tool.stages(refine, foot,correction,handflow=hand), result=result_kind(refine, foot,correction,handflow=hand))
+        stages=tool.stages(refine, foot,correction,handflow=hand)
+        if self.precalculated_camera():
+            if self.precalc_import_options() is None:
+                self.status.setText('Choose a scene file for the Pre-calculated Camera, or switch to Static Camera.');return
+            stages=['scene_import',*stages]
+        self.input_jobs(stages, result=result_kind(refine, foot,correction,handflow=hand))
 
     def save_correction_options(self):
         if self.project is not None:
@@ -1713,6 +1720,7 @@ class MainWindow(PreviewExportWorkspace,PearWorkspace,GemXWorkspace,PromptHMRWor
         environment.insert('RGB_MOCAP_FLOW_GPU_CROP','1' if self.flow_gpu_crop.isChecked() else '0')
         environment.insert('RGB_MOCAP_FLOW_HAND_STRIDE4','1' if self.flow_hand_stride4.isChecked() else '0')
         environment.insert('RGB_MOCAP_FLOW_HAMER','1' if self.flow_hamer.isChecked() else '0')
+        environment.insert('RGB_MOCAP_SCENE_IMPORT',self.precalc_import_environment())
         environment.insert('RGB_MOCAP_EXMR_OPTIONS',json.dumps({'static_camera':self.exmr_camera.currentData(),'smoothing':'global' if self.exmr_smoothing.isChecked() else 'none'}))
         self.process.setProcessEnvironment(environment)
         self.process.readyReadStandardOutput.connect(self.read_stdout)
