@@ -8,7 +8,7 @@ import math
 from types import MethodType
 
 
-def predict(model,data,project,emit):
+def predict(model,data,project,emit,static_cam=True):
     """Select full-context attention and recover once from an actual dense OOM."""
     import gc
     import torch
@@ -29,7 +29,7 @@ def predict(model,data,project,emit):
     failed=False
     try:
         with torch.inference_mode(),query_split(model,selected['attention']=='query_split'):
-            result=model.predict(data,static_cam=True)
+            result=model.predict(data,static_cam=static_cam)
     except torch.cuda.OutOfMemoryError:
         if selected['attention']=='query_split':raise
         failed=True
@@ -47,7 +47,7 @@ def predict(model,data,project,emit):
     atomic_json(project/'gvhmr_attention_plan.json',low)
     emit('compute_plan',**low)
     with torch.inference_mode(),query_split(model,True):
-        return model.predict(data,static_cam=True)
+        return model.predict(data,static_cam=static_cam)
 
 
 def split_attention(self,x,attn_mask=None,key_padding_mask=None):

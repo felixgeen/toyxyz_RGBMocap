@@ -183,6 +183,82 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(reader.default_choices(info), ('Camera01', 'Ground'))
 
 
+class TerrainTests(unittest.TestCase):
+    def test_heightfield_matches_surface_and_low_poly_mesh(self):
+        from mocap.scene_import.terrain import Heightfield
+        pts, faces = terrain_grid(size=20.0, n=60)
+        hf = Heightfield(pts, faces, cell=0.05)
+        x, z = np.array([0.3, -4.1, 7.7]), np.array([1.2, 3.3, -6.0])
+        np.testing.assert_allclose(hf.height(x, z), 0.3 * np.sin(x / 3.0) * np.cos(z / 4.0), atol=0.01)
+        # Two triangles over 20 m: sampling fills the whole grid.
+        quad = np.array([[-10.0, 1.0, -10.0], [10.0, 1.0, -10.0], [10.0, 1.0, 10.0], [-10.0, 1.0, 10.0]])
+        flat = Heightfield(quad, np.array([[0, 1, 2], [0, 2, 3]]), cell=0.1)
+        self.assertGreater(flat.coverage, 0.9)  # the grid's outer row lies past the mesh edge
+        np.testing.assert_allclose(flat.height(x, z), 1.0, atol=1e-9)
+
+    def test_ray_scale(self):
+        from mocap.scene_import.terrain import Heightfield
+        quad = np.array([[-10.0, 0.0, -10.0], [10.0, 0.0, -10.0], [10.0, 0.0, 10.0], [-10.0, 0.0, 10.0]])
+        hf = Heightfield(quad, np.array([[0, 1, 2], [0, 2, 3]]), cell=0.1)
+        origins = np.array([[0.0, 1.6, 0.0], [0.0, 1.6, 0.0]])
+        directions = np.array([[0.0, -0.8, 2.0], [0.0, -0.016, 0.04]])  # hits at s=2 and s=100
+        np.testing.assert_allclose(hf.ray_scale(origins, directions, lo=1e-3, hi=1e3, steps=700), [2.0, 100.0], rtol=1e-3)
+
+
+class PlacementTests(unittest.TestCase):
+    """A walking body seen by a moving camera; the model's depth is off by k_true; placement recovers it."""
+
+    def scene(self, k_true, n=40):
+        from mocap.scene_import.terrain import Heightfield
+        pts, faces = terrain_grid(size=30.0, n=120)
+        hf = Heightfield(pts, faces, cell=0.05)
+        cams = walk_cameras(n)                        # camera-to-world, OpenCV axes
+        w2c = convert.invert_rigid(cams)
+        rest_root = np.array([0.0, 0.9, 0.0])         # pelvis 0.9 m above the soles at rest
+        probes_local = np.array([[-0.1, -0.9, -0.05], [-0.1, -0.9, 0.15], [0.1, -0.9, -0.05], [0.1, -0.9, 0.15]])
+        orient_c, transl_c, probes_c = [], [], []
+        for t in range(n):
+            x, zz = -2.0 + 0.05 * t, 0.0
+            pelvis_w = np.array([x, hf.height(x, zz) + 0.9, zz])
+            R_wc = w2c[t, :3, :3]
+            body_rot_c = R_wc  # body axes aligned with the world
+            pelvis_c = R_wc @ pelvis_w + w2c[t, :3, 3]
+            feet_c = pelvis_c + probes_local @ body_rot_c.T
+            # The model sees the right pixels but misjudges the actor's size: the whole body is scaled by
+            # 1/k_true about the camera centre.
+            pelvis_m = pelvis_c / k_true
+            orient_c.append(Rotation_from_matrix(body_rot_c))
+            transl_c.append(pelvis_m - rest_root)
+            probes_c.append(feet_c / k_true)
+        prob = np.zeros((n, 4))
+        prob[:, [0, 1]] = 0.9                          # left foot planted
+        return hf, w2c, rest_root, np.array(orient_c), np.array(transl_c), np.array(probes_c), prob
+
+    def test_recovers_size_factor(self):
+        from mocap.scene_import.placement import place
+        for k_true in (1.0, 1.15, 100.0):
+            hf, w2c, rest_root, orient_c, transl_c, probes_c, prob = self.scene(k_true)
+            _, transl_w, report = place(orient_c, transl_c, rest_root, probes_c, prob, w2c, hf)
+            self.assertAlmostEqual(report['size_factor'], k_true, delta=0.03 * k_true)
+            if k_true == 1.0:
+                self.assertLess(report['stance_gap_p95_cm'], 3.0)
+                self.assertEqual(report['size_check']['status'], 'ok')
+            if k_true == 100.0:
+                self.assertEqual(report['size_check']['status'], 'unit_error')
+
+    def test_orientation_moves_into_world(self):
+        from mocap.scene_import.placement import place
+        hf, w2c, rest_root, orient_c, transl_c, probes_c, prob = self.scene(1.0, n=5)
+        orient_w, _, _ = place(orient_c, transl_c, rest_root, probes_c, prob, w2c, hf)
+        from scipy.spatial.transform import Rotation
+        np.testing.assert_allclose(Rotation.from_rotvec(orient_w).as_matrix(), np.tile(np.eye(3), (5, 1, 1)), atol=1e-5)
+
+
+def Rotation_from_matrix(m):
+    from scipy.spatial.transform import Rotation
+    return Rotation.from_matrix(m).as_rotvec()
+
+
 WRITE_SCENE = r'''
 import bpy, json, sys, math
 from mathutils import Matrix

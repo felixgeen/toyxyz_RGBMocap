@@ -117,6 +117,13 @@ def load(project,group=None,cancelled=lambda:False,reference_cache=None):
         matrix=np.eye(4);matrix[:3,:3]=raw[0,:3,:3]@np.asarray(world['scene_basis'],float).T
         matrix[:3,3]=-matrix[:3,:3]@np.array([0.,world['camera_height'],0.])
         camera=dict(world_to_camera=validate_transform(matrix),K=world['intrinsics'])
+    precalculated=None
+    if camera is None and group is None and model=='gvhmr' and state.get('scene_import') and (project/'scene_import.npz').is_file():
+        # Pre-calculated Camera: the imported track IS the camera; nothing is estimated.
+        path=tracked(project/'scene_import.npz')
+        precalculated=dict(matrices=load_array(path,'world_to_camera'),K=load_array(path,'K'))
+        if precalculated['matrices'].ndim!=3 or len(precalculated['matrices'])!=state['frames']:raise ValueError('Imported camera is stale. Reconstruct 3D.')
+        camera=dict(world_to_camera=precalculated['matrices'][0],K=precalculated['K'][0])
     if camera is None and group is None and model in ('exmr','gvhmr') and not had_scene:
         camera=paired_reference(project,cancelled,reference_cache)
         for name,stamp in camera['sources'].items():dependencies[project/name]=stamp
@@ -143,6 +150,11 @@ def load(project,group=None,cancelled=lambda:False,reference_cache=None):
             if np.any(np.abs(c.get('distortion_coeffs',[0]))>1e-8):note=warning='Distorted camera videos may not align with the pinhole overlay.'
             items.append(record(e['id'],c['intrinsic_matrix'],c['image_size'],m,meta['start'],meta['fps'],'Saved fixed MAMMA calibration'))
         if not np.allclose(items[0]['matrices'][0],base,atol=1e-6):raise ValueError('MAMMA camera world changed. Prepare Preview first.')
+    elif precalculated is not None:
+        name=Path(state['scene_import'].get('path','')).name
+        items=[record('Camera 1',precalculated['K'][0],[state['width'],state['height']],precalculated['matrices'],state['start'],state['fps'],
+                      'Pre-calculated camera from '+name)]
+        note='Pre-calculated camera from '+name+'.'
     elif model=='prompthmr' and camera.get('camera_track'):
         from .people_store import root_for
         saved=camera['camera_track'];p=(project/saved['path']).resolve()

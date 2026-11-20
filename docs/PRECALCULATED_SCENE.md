@@ -15,7 +15,15 @@ Pre-calculated Mesh correction mode and export back to the original scene frame 
    - **Up Axis**: Auto detects up from the camera and terrain. Exporters often declare one axis and write another.
    - **Scene Scale**: suggested when the camera height or terrain size is not plausible in metres.
 4. **Reconstruct 3D**. The *Import Scene* stage runs first and saves `scene_import.npz` and `scene_import.json`
-   in the project.
+   in the project. GVHMR then gets the real lens (K per frame) and camera rotation (`cam_angvel`) and runs in
+   moving-camera mode. HTD Refine is skipped, because it assumes a static camera.
+5. The actor is placed in the scene world with the known camera and stood on the terrain (`scene_place.json`):
+   - One size factor per actor slides the body along the camera rays until the stance feet meet the terrain
+     (weighted median over stance rays, outliers rejected). The body keeps its size and its pixels.
+   - The size factor is the post-solve scale check: near 1 is fine; near a power of ten is a unit error with a
+     suggested fix; anything else asks for a re-export in real-world units.
+   - GVHMR's own world track is kept as `smpl_params_global_gvhmr`.
+   - The viewer shows the imported camera track.
 
 ## How it works
 

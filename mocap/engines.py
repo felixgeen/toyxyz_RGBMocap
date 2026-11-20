@@ -284,12 +284,22 @@ def gvhmr(project: Path, emit) -> Path:
             "K_fullimg": torch.from_numpy(tracking["K"])[None].expand(len(bbx), 3, 3),
             "cam_angvel": torch.tensor([1, 0, 0, 0, 1, 0], dtype=torch.float32)[None].expand(len(bbx), 6),
             "f_imgseq": features_tensor}
+    from .scene_import.gvhmr import active as precalculated_scene
+    scene = precalculated_scene(project)
+    if scene is not None:
+        # Pre-calculated Camera: the real lens and camera rotation replace the guessed focal and static camera.
+        from .scene_import.gvhmr import model_inputs
+        data["K_fullimg"], data["cam_angvel"] = model_inputs(scene, len(bbx))
     emit("progress", stage="gvhmr", message="Reconstructing initial 3D motion", current=2, total=3)
     from .gvhmr_attention import predict
-    result=predict(model,data,project,emit)
+    result=predict(model,data,project,emit,static_cam=scene is None)
     from hmr4d.utils.net_utils import detach_to_cpu
+    result = detach_to_cpu(result)
+    if scene is not None:
+        from .scene_import.gvhmr import place_result
+        place_result(project, result, scene, emit)
     target = project / "hmr4d_results.pt"
-    save_tensor(detach_to_cpu(result), target)
+    save_tensor(result, target)
     return target
 
 

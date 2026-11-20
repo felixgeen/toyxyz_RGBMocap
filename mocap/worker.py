@@ -81,6 +81,9 @@ def fingerprint(stage, project, result="auto", _worker_hash=None, _legacy_routin
     if stage == 'refine':
         sources.extend(ROOT/'third_party/HTD-Refine'/name for name in (
             'optimization/camera_alignment.py','optimization/pipeline.py','scripts/demo_optimization.py'))
+    if stage=='gvhmr' and (Path(project)/'scene_import.npz').is_file():
+        inputs['gvhmr'].append('scene_import.npz')
+        sources.extend(sorted(Path(__file__).with_name('scene_import').glob('*.py')))
     if stage in ('gvhmr','features'):
         sources.append(Path(__file__).with_name('model_session.py'))
         sources.extend((Path(__file__).with_name('inference_data.py'),

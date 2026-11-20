@@ -1358,6 +1358,9 @@ class MainWindow(SceneImportWorkspace,PreviewExportWorkspace,PearWorkspace,GemXW
             state['flow_options']={**state.get('flow_options',{}),**self.selected_flow_options()}
             atomic_json(path,state)
         refine = bool(tool.refinement) and self.htd_refine.isChecked()
+        if refine and self.precalculated_camera():
+            # HTD Refine assumes a static camera; it would undo the pre-calculated camera placement.
+            refine=False;self.log.append('HTD Refine is skipped with a Pre-calculated Camera (it assumes a static camera).')
         foot = tool.key=='gvhmr' and self.footmr_refine.isChecked()
         correction=self.motion_correction.isChecked()
         if correction:self.save_correction_options()
