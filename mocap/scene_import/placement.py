@@ -86,11 +86,35 @@ def steady_root(raw_root, model_root, fps, low_seconds=1.0):
     s, R, t = align_up_yaw(model_root, raw_root)
     aligned = s * model_root @ R.T + t
     drift = gaussian_filter1d(raw_root - aligned, max(1.0, low_seconds * fps), axis=0, mode='nearest')
-    return aligned + drift, dict(model_scale=s, model_yaw_deg=float(np.degrees(np.arctan2(R[0, 2], R[0, 0]))))
+    return aligned + drift, dict(model_scale=s, model_yaw_deg=float(np.degrees(np.arctan2(R[0, 2], R[0, 0]))), model_yaw=R)
+
+
+def upright(orient_camera, orient_model, yaw):
+    """Body orientation: heading and pose from the camera-based solve, LEAN from the model's gravity-aware world.
+
+    A camera-frame body put into the world with the known camera inherits the model's view-dependent pitch error:
+    from a high camera the actor leans away from it (12.6 deg vs 2.3 deg in GVHMR's own world on the demo shot at a
+    37 deg down view). Swing the body's up axis onto the model's up axis (minimal rotation); the twist about that
+    axis, i.e. where the actor faces, stays as the footage shows it."""
+    from scipy.spatial.transform import Rotation
+    Ra = Rotation.from_rotvec(orient_camera).as_matrix()
+    Rb = yaw @ Rotation.from_rotvec(orient_model).as_matrix()
+    ua, ub = Ra[:, :, 1], Rb[:, :, 1]
+    axis = np.cross(ua, ub)
+    s = np.linalg.norm(axis, axis=1)
+    c = np.einsum('ti,ti->t', ua, ub)
+    angle = np.arctan2(s, c)
+    axis = axis / np.maximum(s, 1e-12)[:, None]
+    swing = Rotation.from_rotvec(axis * angle[:, None]).as_matrix()
+    lean = lambda M: np.degrees(np.arccos(np.clip(M[:, 1, 1], -1, 1)))
+    out = swing @ Ra
+    return Rotation.from_matrix(out).as_rotvec(), swing, dict(lean_camera_deg_median=float(np.median(lean(Ra))),
+        lean_camera_deg_p95=float(np.percentile(lean(Ra), 95)), lean_deg_median=float(np.median(lean(out))),
+        lean_deg_p95=float(np.percentile(lean(out), 95)), swing_deg_p95=float(np.percentile(np.degrees(angle), 95)))
 
 
 def place(orient_c, transl_c, rest_root, probes_c, probabilities, world_to_camera, heightfield,
-          model_height=None, actor_height=None, per_frame=True, fps=30.0, model_root=None):
+          model_height=None, actor_height=None, per_frame=True, fps=30.0, model_root=None, model_orient=None):
     """World-frame global_orient/transl for a camera-frame body, plus a report. All arrays per working frame.
 
     orient_c (n,3) axis-angle and transl_c (n,3): smpl_params_incam (OpenCV camera frame).
@@ -138,6 +162,17 @@ def place(orient_c, transl_c, rest_root, probes_c, probabilities, world_to_camer
         del dist
     transl_w = root_w - rest_root
     orient_w = Rotation.from_matrix(R @ Rotation.from_rotvec(orient_c).as_matrix()).as_rotvec()
+    lean = None
+    if model_orient is not None and steady is not None:
+        orient_w, swing, lean = upright(orient_w, np.asarray(model_orient, float), steady['model_yaw'])
+        # Pivot the lean about the feet, not the pelvis: the feet keep their place in the footage and on the
+        # terrain; the upper body moves (the part the camera-based lean got wrong).
+        feet = root_w[:, None] + np.einsum('tij,tpj->tpi', R, probes_c - pelvis_c[:, None])
+        pivot = feet.mean(1)
+        root_w = pivot + np.einsum('tij,tj->ti', swing, root_w - pivot)
+        transl_w = root_w - rest_root
+    if steady is not None:
+        steady['model_yaw'] = steady['model_yaw'].tolist()
     # Foot-to-terrain distance in stance frames after placement (the body keeps its size, so this is not zero).
     feet_w = root_w[:, None] + np.einsum('tij,tpj->tpi', R, probes_c - pelvis_c[:, None])
     gap = feet_w[..., 1] - heightfield.height(feet_w[..., 0], feet_w[..., 2])
@@ -146,7 +181,7 @@ def place(orient_c, transl_c, rest_root, probes_c, probabilities, world_to_camer
     lowest = lowest[np.isfinite(lowest)]
     report = dict(size_factor=k, size_check=scale_check.size_factor_check(k, model_height, actor_height),
                   per_frame_depth=bool(per_frame), depth_factor_range=[float(depth.min()), float(depth.max())],
-                  steady_root=steady,
+                  steady_root=steady, upright=lean,
                   model_height_m=model_height, actor_height_m=actor_height, stance_frames=int(stance.any(1).sum()),
                   frames=n, rays=stats, warning=warning,
                   stance_gap_median_cm=float(np.median(stance_gap) * 100) if len(stance_gap) else None,

@@ -71,7 +71,8 @@ def place_result(project, result, scene, emit=lambda *a, **k: None):
     model_root = result['smpl_params_global']['transl'].double().numpy() + rest_root  # GVHMR's own smooth world
     orient_w, transl_w, report = place(orient_c, transl_c, rest_root, probes, probabilities,
                                        arrays['world_to_camera'], heightfield, model_height, actor_height,
-                                       model_root=model_root)
+                                       model_root=model_root,
+                                       model_orient=result['smpl_params_global']['global_orient'].double().numpy())
     original = result['smpl_params_global']
     result['smpl_params_global_gvhmr'] = {k: v.clone() for k, v in original.items()}
     placed = {k: v.clone() for k, v in incam.items()}
@@ -91,6 +92,10 @@ def place_result(project, result, scene, emit=lambda *a, **k: None):
         st = report['steady_root']
         emit('info', message=f"Steady root: acceleration {st['raw_accel_rms']:.0f} -> {st['accel_rms']:.1f} m/s2 RMS; "
                              f"root moved {st['root_shift_cm_median']:.1f} cm median ({st['root_shift_cm_p95']:.1f} cm p95).")
+    if report.get('upright'):
+        u = report['upright']
+        emit('info', message=f"Upright: body lean from the camera {u['lean_camera_deg_median']:.1f} deg median ({u['lean_camera_deg_p95']:.1f} p95) "
+                             f"-> {u['lean_deg_median']:.1f} deg ({u['lean_deg_p95']:.1f} p95), from GVHMR's gravity-aware world.")
     if report['warning']:
         emit('info', message='Terrain placement: ' + report['warning'])
     return report
