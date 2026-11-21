@@ -809,7 +809,7 @@ class MainWindow(SceneImportWorkspace,PreviewExportWorkspace,PearWorkspace,GemXW
             if self.model_pages.widget(index).property("motion_tool") == tool.key:
                 self.model_pages.setCurrentIndex(index)
                 break
-        self.model_pages.setVisible(tool.key not in ('gvhmr', 'gemx'))
+        self.model_pages.setVisible(tool.key != 'gemx')  # GVHMR now has settings: Camera
         self.htd_refine.setVisible(bool(tool.refinement))
         self.refine_description.setVisible(bool(tool.refinement))
         self.footmr_refine.setVisible(tool.key == "gvhmr")
