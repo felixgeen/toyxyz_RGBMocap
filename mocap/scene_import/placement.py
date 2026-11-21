@@ -57,8 +57,40 @@ def per_frame_depth(n, frames, scales, weights, k, fps, smooth_seconds=0.3, limi
     return np.clip(np.exp(log_k), k / limit, k * limit)
 
 
+def align_up_yaw(source, target, weights=None):
+    """Similarity (scale s, rotation about +Y, translation) taking source points (n,3) onto target (n,3)."""
+    w = np.ones(len(source)) if weights is None else np.asarray(weights, float)
+    w = w / w.sum()
+    ms, mt = w @ source, w @ target
+    a, b = source - ms, target - mt
+    # Rotation about Y: maximise sum w * (b_xz . R a_xz)
+    sxx = np.sum(w * (a[:, 0] * b[:, 0] + a[:, 2] * b[:, 2]))
+    sxz = np.sum(w * (a[:, 2] * b[:, 0] - a[:, 0] * b[:, 2]))
+    theta = np.arctan2(sxz, sxx)
+    c, si = np.cos(theta), np.sin(theta)
+    R = np.array([[c, 0, si], [0, 1, 0], [-si, 0, c]])
+    ra = a @ R.T
+    scale = float(np.sum(w[:, None] * ra * b) / max(np.sum(w[:, None] * ra * ra), 1e-12))
+    return scale, R, mt - scale * ms @ R.T
+
+
+def steady_root(raw_root, model_root, fps, low_seconds=1.0):
+    """Complementary filter for the root trajectory.
+
+    raw_root: camera-consistent placement (correct pixels and long-term position, but the model's per-frame depth
+    noise along the camera ray: GVHMR's camera-frame depth jumps several cm from frame to frame).
+    model_root: the model's own world trajectory (temporally smooth, but in its own frame and slowly drifting).
+    Result: model_root aligned to the scene (scale + yaw + offset) for the fast motion, plus a low-pass of the
+    difference for the slow motion. Fast depth noise goes, the steps and the footage-consistent path stay."""
+    from scipy.ndimage import gaussian_filter1d
+    s, R, t = align_up_yaw(model_root, raw_root)
+    aligned = s * model_root @ R.T + t
+    drift = gaussian_filter1d(raw_root - aligned, max(1.0, low_seconds * fps), axis=0, mode='nearest')
+    return aligned + drift, dict(model_scale=s, model_yaw_deg=float(np.degrees(np.arctan2(R[0, 2], R[0, 0]))))
+
+
 def place(orient_c, transl_c, rest_root, probes_c, probabilities, world_to_camera, heightfield,
-          model_height=None, actor_height=None, per_frame=True, fps=30.0):
+          model_height=None, actor_height=None, per_frame=True, fps=30.0, model_root=None):
     """World-frame global_orient/transl for a camera-frame body, plus a report. All arrays per working frame.
 
     orient_c (n,3) axis-angle and transl_c (n,3): smpl_params_incam (OpenCV camera frame).
@@ -87,16 +119,34 @@ def place(orient_c, transl_c, rest_root, probes_c, probabilities, world_to_camer
     depth = per_frame_depth(n, t_idx, scales, probabilities[t_idx, p_idx], k, fps) if per_frame else np.full(n, k)
     pelvis_c = transl_c + rest_root
     root_w = np.einsum('tij,tj->ti', R, depth[:, None] * pelvis_c) + C
+    steady = None
+    if model_root is not None and len(model_root) == n and n > 3:
+        raw = root_w
+        smooth, steady = steady_root(raw, np.asarray(model_root, float), fps)
+        # Keep the footage: the root stays on its camera ray (exact pixels); only its distance comes from the
+        # steady trajectory. Image-plane motion was never the noisy part, depth along the ray was.
+        ray = raw - C
+        ray /= np.linalg.norm(ray, axis=1, keepdims=True)
+        root_w = C + ray * np.einsum('ti,ti->t', smooth - C, ray)[:, None]
+        # How far the steadied root moved from the camera-consistent one, in pixels at its depth.
+        off = root_w - raw
+        dist = np.linalg.norm(raw - C, axis=1)
+        steady.update(root_shift_cm_median=float(np.median(np.linalg.norm(off, axis=1)) * 100),
+                      root_shift_cm_p95=float(np.percentile(np.linalg.norm(off, axis=1), 95) * 100),
+                      raw_accel_rms=float(np.sqrt(np.mean(np.sum(np.diff(raw, 2, axis=0) ** 2, 1))) * fps * fps),
+                      accel_rms=float(np.sqrt(np.mean(np.sum(np.diff(root_w, 2, axis=0) ** 2, 1))) * fps * fps))
+        del dist
     transl_w = root_w - rest_root
     orient_w = Rotation.from_matrix(R @ Rotation.from_rotvec(orient_c).as_matrix()).as_rotvec()
     # Foot-to-terrain distance in stance frames after placement (the body keeps its size, so this is not zero).
-    feet_w = np.einsum('tij,tpj->tpi', R, depth[:, None, None] * pelvis_c[:, None] + (probes_c - pelvis_c[:, None])) + C[:, None]
+    feet_w = root_w[:, None] + np.einsum('tij,tpj->tpi', R, probes_c - pelvis_c[:, None])
     gap = feet_w[..., 1] - heightfield.height(feet_w[..., 0], feet_w[..., 2])
     stance_gap = np.abs(gap[stance])
     lowest = np.where(stance, gap, np.inf).min(1)
     lowest = lowest[np.isfinite(lowest)]
     report = dict(size_factor=k, size_check=scale_check.size_factor_check(k, model_height, actor_height),
                   per_frame_depth=bool(per_frame), depth_factor_range=[float(depth.min()), float(depth.max())],
+                  steady_root=steady,
                   model_height_m=model_height, actor_height_m=actor_height, stance_frames=int(stance.any(1).sum()),
                   frames=n, rays=stats, warning=warning,
                   stance_gap_median_cm=float(np.median(stance_gap) * 100) if len(stance_gap) else None,

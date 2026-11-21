@@ -254,6 +254,30 @@ class PlacementTests(unittest.TestCase):
         np.testing.assert_allclose(Rotation.from_rotvec(orient_w).as_matrix(), np.tile(np.eye(3), (5, 1, 1)), atol=1e-5)
 
 
+class SteadyRootTests(unittest.TestCase):
+    def test_depth_noise_removed_pixels_kept(self):
+        """Depth noise along the camera ray goes; the root stays on its ray (pixels unchanged)."""
+        from mocap.scene_import.placement import steady_root
+        rng = np.random.default_rng(1)
+        n, fps = 200, 25.0
+        t = np.arange(n) / fps
+        truth = np.stack([0.8 * t, 0.1 * np.sin(t), 5.0 + 0.2 * t], 1)            # smooth walk
+        cam = np.array([0.0, 1.6, -2.0])
+        ray = truth - cam
+        noisy = cam + ray * (1 + 0.03 * rng.standard_normal(n))[:, None]        # 3% depth noise
+        yaw = np.array([[0.0, 0, 1], [0, 1, 0], [-1, 0, 0]])
+        model = (truth - truth[0]) @ yaw.T * 1.1 + 7.0                          # same motion, other frame and scale
+        smooth, info = steady_root(noisy, model, fps)
+        u = ray / np.linalg.norm(ray, axis=1, keepdims=True)
+        on_ray = cam + u * np.einsum('ti,ti->t', smooth - cam, u)[:, None]
+        acc = lambda x: np.sqrt(np.mean(np.sum(np.diff(x, 2, axis=0) ** 2, 1)))
+        self.assertLess(acc(on_ray), 0.1 * acc(noisy))
+        error = np.linalg.norm(on_ray - truth, axis=1)
+        self.assertLess(np.median(error), 0.04)      # 3% depth noise at ~6 m is ~16 cm before
+        self.assertLess(np.percentile(error, 90), 0.08)
+        self.assertAlmostEqual(info['model_scale'], 1 / 1.1, delta=0.02)
+
+
 class TerrainContactTests(unittest.TestCase):
     """Pre-calculated Mesh correction targets: terrain by default, footage when they disagree, user overrides win."""
 

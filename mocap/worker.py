@@ -174,7 +174,11 @@ def main() -> int:
             return 0
         if args.stage == "prepare":
             from .video import prepare
-            project = prepare(args.video.resolve(), args.start, args.end,motion_tool=args.motion_tool or 'gvhmr',project=args.project)
+            scene=os.environ.get('RGB_MOCAP_SCENE_IMPORT','')
+            # A Pre-calculated Camera works at the plate's own frame rate: a 25 -> 30 fps working clip repeats every
+            # fifth plate frame, which makes the camera and the solved body stutter.
+            working_fps=float(json.loads(scene)['plate_fps']) if scene else 30.0
+            project = prepare(args.video.resolve(), args.start, args.end,motion_tool=args.motion_tool or 'gvhmr',project=args.project,fps=working_fps)
             manifest = json.loads((project / "project.json").read_text(encoding="utf-8"))
             if args.motion_tool=='flowhmr':
                 manifest['flow_options']={**manifest.get('flow_options',{}),'camera_interval':int(os.environ.get('RGB_MOCAP_FLOW_INTERVAL','0')),'fast_sam':os.environ.get('RGB_MOCAP_FLOW_FAST_SAM','1')=='1','sam_batch4':os.environ.get('RGB_MOCAP_FLOW_BATCH4','1')=='1','sam_gpu_crop':os.environ.get('RGB_MOCAP_FLOW_GPU_CROP','1')=='1','sam_hand_stride4':os.environ.get('RGB_MOCAP_FLOW_HAND_STRIDE4','1')=='1'}
@@ -185,7 +189,6 @@ def main() -> int:
                 manifest['exmr_options']=options(json.loads(os.environ.get('RGB_MOCAP_EXMR_OPTIONS','{}')))
             if args.motion_tool:
                 manifest.setdefault('pipeline',{})['model']=args.motion_tool
-            scene=os.environ.get('RGB_MOCAP_SCENE_IMPORT','')
             if scene:manifest['scene_import']=json.loads(scene)
             else:manifest.pop('scene_import',None)
             if args.result != "auto":

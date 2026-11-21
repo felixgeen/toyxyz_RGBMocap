@@ -110,7 +110,8 @@ def ensure_preview(project: Path, cancelled=None) -> Path:
     return project / "preview.mp4"
 
 
-def prepare(source: Path, start: float = 0.0, end: float | None = None, motion_tool='gvhmr', project=None, cancelled=None) -> Path:
+def prepare(source: Path, start: float = 0.0, end: float | None = None, motion_tool='gvhmr', project=None, cancelled=None, fps: float = 30.0) -> Path:
+    """fps: working-clip rate. 30 by default; a Pre-calculated Camera keeps the plate's own rate (no repeated frames)."""
     from .motion_tools import require_supported_tool
     tool=require_supported_tool(motion_tool)
     if tool.input_setup_only:
@@ -139,6 +140,9 @@ def prepare(source: Path, start: float = 0.0, end: float | None = None, motion_t
         old=json.loads((root/'project.json').read_text(encoding='utf-8'))
         if abs(old['start']-start)>1e-6 or abs(old['end']-end)>1e-6:
             root=saved_root/motion_tool/'clips'/workspace.range_key(start,end)
+        elif abs(float(old.get('fps',30))-fps)>1e-6:
+            # Same range at another working rate (Pre-calculated Camera): a separate clip, nothing overwritten.
+            root=saved_root/motion_tool/'clips'/(workspace.range_key(start,end)+f'_{fps:g}fps')
     root.mkdir(parents=True, exist_ok=True)
     video = root / "input.mp4"
     manifest_path = root / "project.json"
@@ -151,7 +155,8 @@ def prepare(source: Path, start: float = 0.0, end: float | None = None, motion_t
         workspace.set_active(saved_root,motion_tool,root)
         return root
     temporary = root / "input.partial.mp4"
-    resample='fps=30:start_time=0' if motion_tool=='flowhmr' else 'fps=30'
+    rate=f'{fps:g}'
+    resample=f'fps={rate}:start_time=0' if motion_tool=='flowhmr' else f'fps={rate}'
     command = [executable("ffmpeg"), "-hide_banner", "-loglevel", "error", "-i", str(source), "-ss", str(start-offset),
                "-t", str(end - start), "-map", "0:v:0", "-an", "-vf", resample+",scale=trunc(iw/2)*2:trunc(ih/2)*2",
                "-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p", "-y", str(temporary)]
@@ -160,12 +165,12 @@ def prepare(source: Path, start: float = 0.0, end: float | None = None, motion_t
     if output["frames"] < 4:
         raise ValueError("Select a range containing at least four frames.")
     temporary.replace(video)
-    timeline = {"start": start, "step": 1 / 30, "frames": output["frames"]}
+    timeline = {"start": start, "step": 1 / fps, "frames": output["frames"]}
     atomic_json(manifest_path, {"version": 1, "source": saved['source'], "source_sha256": sha256(source), "start": start,
-        "end": end, "fps": 30, "frames": output["frames"], "width": output["width"], "height": output["height"],
+        "end": end, "fps": fps, "frames": output["frames"], "width": output["width"], "height": output["height"],
         "camera": "static", "stages": {}, "pipeline": {"model": motion_tool}, "timeline": timeline,
         'workspace_root':os.path.relpath(saved_root,root),
-        **({"original_times": [start + i / 30 for i in range(output["frames"])]} if output["frames"] <= 18000 else {})})
+        **({"original_times": [start + i / fps for i in range(output["frames"])]} if output["frames"] <= 18000 else {})})
     ensure_preview(root, cancelled)
     workspace.set_active(saved_root,motion_tool,root)
     return root

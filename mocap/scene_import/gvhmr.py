@@ -68,8 +68,10 @@ def place_result(project, result, scene, emit=lambda *a, **k: None):
         rest = body(betas=torch.from_numpy(betas[None]).float()).vertices[0].numpy()
     model_height = float(rest[:, 1].max() - rest[:, 1].min())
     actor_height = (meta.get('options') or {}).get('actor_height') or None
+    model_root = result['smpl_params_global']['transl'].double().numpy() + rest_root  # GVHMR's own smooth world
     orient_w, transl_w, report = place(orient_c, transl_c, rest_root, probes, probabilities,
-                                       arrays['world_to_camera'], heightfield, model_height, actor_height)
+                                       arrays['world_to_camera'], heightfield, model_height, actor_height,
+                                       model_root=model_root)
     original = result['smpl_params_global']
     result['smpl_params_global_gvhmr'] = {k: v.clone() for k, v in original.items()}
     placed = {k: v.clone() for k, v in incam.items()}
@@ -85,6 +87,10 @@ def place_result(project, result, scene, emit=lambda *a, **k: None):
     if report['stance_gap_median_cm'] is not None:
         emit('info', message=f"Stance feet to terrain: median {report['stance_gap_median_cm']:.1f} cm, "
                              f"95th percentile {report['stance_gap_p95_cm']:.1f} cm (Motion Correction locks them).")
+    if report.get('steady_root'):
+        st = report['steady_root']
+        emit('info', message=f"Steady root: acceleration {st['raw_accel_rms']:.0f} -> {st['accel_rms']:.1f} m/s2 RMS; "
+                             f"root moved {st['root_shift_cm_median']:.1f} cm median ({st['root_shift_cm_p95']:.1f} cm p95).")
     if report['warning']:
         emit('info', message='Terrain placement: ' + report['warning'])
     return report
