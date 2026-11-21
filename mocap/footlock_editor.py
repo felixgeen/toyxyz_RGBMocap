@@ -209,6 +209,15 @@ class FootLockEditor:
         redo=menu.addAction('Redo',self.redo_contact);redo.setEnabled(bool(self._redo_contacts))
         menu.addSeparator();menu.addAction('Reset This Track to Automatic',lambda:self.reset_contact_foot(foot))
         menu.addAction('Reset All Locks to Automatic',self.contacts_reset.emit)
+        targets=getattr(self,'terrain_targets',None)
+        if targets is not None and foot in (0,1):
+            # Pre-calculated Mesh: choose what this foot contact locks to.
+            frame=min(self.maximum(),self._edge_position(event))
+            current=targets(foot,frame)
+            menu.addSeparator()
+            for label,value in (('Lock to Terrain','terrain'),('Keep Footage Height','footage'),('Automatic Target',None)):
+                action=menu.addAction(label,lambda value=value:self.terrain_target_changed.emit(foot,frame,value))
+                action.setCheckable(True);action.setChecked(current==value)
         menu.exec(event.globalPos());menu.deleteLater()
 
     def _contact_rect(self,foot,interval):

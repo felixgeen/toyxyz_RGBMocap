@@ -31,14 +31,16 @@ class Heightfield:
             _, nearest = cKDTree(centres[filled]).query(centres[~filled])
             grid[~filled] = grid[filled][nearest]
         self.grid = grid.reshape(self.shape)
-        self.inside_mask = filled.reshape(self.shape)
+        # Random sampling can miss single cells inside the mesh; close those pinholes (not the outer boundary).
+        from scipy.ndimage import binary_closing
+        self.inside_mask = binary_closing(filled.reshape(self.shape), iterations=2, border_value=0) | filled.reshape(self.shape)
 
     @staticmethod
     def _samples(v, f, cell, max_samples):
         a, b, c = v[f[:, 0]], v[f[:, 1]], v[f[:, 2]]
         # Plan-view area decides how many samples a triangle needs to touch every cell it covers.
         plan = 0.5 * np.abs((b[:, 0] - a[:, 0]) * (c[:, 2] - a[:, 2]) - (c[:, 0] - a[:, 0]) * (b[:, 2] - a[:, 2]))
-        counts = np.ceil(plan / (cell * cell) * 3).astype(np.int64)
+        counts = np.ceil(plan / (cell * cell) * 6).astype(np.int64)
         extra = counts.sum()
         if extra > max_samples:
             counts = np.ceil(counts * (max_samples / extra)).astype(np.int64)
@@ -92,3 +94,24 @@ class Heightfield:
         t = g0 / (g0 - g1)
         out[k] = s[f - 1] + t * (s[f] - s[f - 1])
         return out
+
+
+def wireframe(heightfield, spacing=0.5, step=0.25):
+    """Line segments (n,2,3) following the terrain: one line every `spacing` metres along X and Z."""
+    hf = heightfield
+    lo = hf.origin
+    hi = lo + (np.array(hf.shape) - 1) * hf.cell
+    lines = []
+    for axis in (0, 1):
+        across = np.arange(lo[1 - axis], hi[1 - axis] + 1e-9, spacing)
+        along = np.arange(lo[axis], hi[axis] + 1e-9, step)
+        for c in across:
+            xz = np.empty((len(along), 2))
+            xz[:, axis], xz[:, 1 - axis] = along, c
+            inside = hf.inside(xz[:, 0], xz[:, 1])
+            y = hf.height(xz[:, 0], xz[:, 1])
+            pts = np.stack([xz[:, 0], y, xz[:, 1]], 1)
+            keep = inside[:-1] & inside[1:]
+            if keep.any():
+                lines.append(np.stack([pts[:-1][keep], pts[1:][keep]], 1))
+    return np.concatenate(lines) if lines else np.zeros((0, 2, 3))

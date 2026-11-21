@@ -1047,6 +1047,7 @@ class MainWindow(SceneImportWorkspace,PreviewExportWorkspace,PearWorkspace,GemXW
         self.project = project
         self.camera_tools.restore_background({})
         self.workspace_project_loaded(project,manifest)
+        self.precalc_project_loaded(project)
         from .project_storage import storage_root
         saved_root=storage_root(project,manifest)
         self.setWindowTitle('RGB MoCap | '+(saved_root.name if saved_root else 'Motion Workspace'))
@@ -1386,7 +1387,8 @@ class MainWindow(SceneImportWorkspace,PreviewExportWorkspace,PearWorkspace,GemXW
         from .correction_settings import correction_options
         return correction_options({'auto_floor':self.auto_floor.isChecked(),'floor':self.floor_height.value(),
                                    'mode':self.correction_mode.currentData(),'foot_lock':self.foot_lock.isChecked(),'hand_lock':self.hand_lock.isChecked(),
-                                   'preset':self.correction_preset.currentData(),'pelvis_offset':self.pelvis_offset.value()})
+                                   'preset':self.correction_preset.currentData(),'pelvis_offset':self.pelvis_offset.value(),
+                                   'terrain_overrides':getattr(self,'terrain_overrides',[])})
 
     def update_correction_description(self):
         descriptions = {
@@ -1397,6 +1399,8 @@ class MainWindow(SceneImportWorkspace,PreviewExportWorkspace,PearWorkspace,GemXW
         self.preset_description.setText(descriptions[self.correction_preset.currentData()])
         if self.correction_mode.currentData()=='multi_level':
             self.floor_description.setText('Multi Level uses the inferred height of each foot contact. This floor value is unused; switch to Flat Ground to edit it.')
+        elif self.correction_mode.currentData()=='terrain':
+            self.floor_description.setText('Pre-calculated Mesh locks each foot contact to the imported terrain, or keeps the footage height where they disagree by more than 10 cm. Right-click a contact in the timeline to switch it. This floor value is unused.')
         else:
             self.floor_description.setText('Higher values raise the correction floor. Use the Correction Floor checkbox to preview it; Apply Correction updates the motion.')
 
@@ -1411,9 +1415,11 @@ class MainWindow(SceneImportWorkspace,PreviewExportWorkspace,PearWorkspace,GemXW
             self.foot_lock.setChecked(options['foot_lock']);self.hand_lock.setChecked(options['hand_lock'])
             self.auto_floor.setChecked(options['auto_floor']);self.floor_height.setValue(options['floor'])
             self.pelvis_offset.setValue(options['pelvis_offset'])
+            self.terrain_overrides=list(options.get('terrain_overrides',[]))
         finally:
             for control in controls:control.blockSignals(False)
         self.update_correction_description()
+        self.terrain_targets_mode_changed()
 
     def correction_settings_changed(self, *_):
         if self.sender() is self.floor_height and self.auto_floor.isChecked():return
@@ -1864,6 +1870,7 @@ class MainWindow(SceneImportWorkspace,PreviewExportWorkspace,PearWorkspace,GemXW
             if not event.get('batch_inner'):self.task_state.cached|=bool(event.get('cached',False))
             if event.get('stage')=='gvhmr' and self.job_project is not None and (self.job_project/'scene_place.json').is_file():
                 self.precalc_after_solve(self.job_project)
+                self.precalc_project_loaded(self.job_project)
             self.log.append(f"{STAGES.get(event['stage'])}: {event.get('elapsed', 0):.2f} s · {event.get('output')}")
         self.log.ensureCursorVisible()
 

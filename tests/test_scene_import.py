@@ -254,6 +254,51 @@ class PlacementTests(unittest.TestCase):
         np.testing.assert_allclose(Rotation.from_rotvec(orient_w).as_matrix(), np.tile(np.eye(3), (5, 1, 1)), atol=1e-5)
 
 
+class TerrainContactTests(unittest.TestCase):
+    """Pre-calculated Mesh correction targets: terrain by default, footage when they disagree, user overrides win."""
+
+    def setUp(self):
+        from mocap.scene_import.terrain import Heightfield
+        quad = np.array([[-10.0, 0.5, -10.0], [10.0, 0.5, -10.0], [10.0, 0.5, 10.0], [-10.0, 0.5, 10.0]])
+        self.hf = Heightfield(quad, np.array([[0, 1, 2], [0, 2, 3]]), cell=0.1)
+
+    def plan(self, footage_heights):
+        n = 10 * len(footage_heights)
+        anchors = np.zeros((n, 2, 3))
+        segments = []
+        for i, h in enumerate(footage_heights):
+            anchors[10 * i:10 * i + 10, 0] = [0.2 * i, h, 0.0]
+            segments.append(dict(foot=0, start=10 * i, end=10 * i + 10))
+        return anchors, segments
+
+    def test_auto_targets(self):
+        from mocap.scene_import.contacts import apply
+        anchors, segments = self.plan([0.53, 0.9])   # 3 cm and 40 cm above the 0.5 m terrain
+        summary = apply(anchors, segments, self.hf)
+        self.assertEqual([s['target'] for s in segments], ['terrain', 'footage'])
+        np.testing.assert_allclose(anchors[:10, 0, 1], 0.5, atol=1e-9)
+        np.testing.assert_allclose(anchors[10:, 0, 1], 0.9)
+        self.assertEqual((summary['terrain'], summary['footage_auto']), (1, 1))
+
+    def test_override_and_options(self):
+        from mocap.scene_import.contacts import apply
+        from mocap.correction_settings import correction_options
+        anchors, segments = self.plan([0.53, 0.9])
+        apply(anchors, segments, self.hf, [dict(foot=0, frame=3, target='footage'), dict(foot=0, frame=14, target='terrain')])
+        self.assertEqual([s['target'] for s in segments], ['footage', 'terrain'])
+        np.testing.assert_allclose(anchors[10:, 0, 1], 0.5, atol=1e-9)
+        opts = correction_options(dict(mode='terrain', terrain_overrides=[dict(foot=1, frame=7, target='footage')]))
+        self.assertEqual(opts['terrain_overrides'], [dict(foot=1, frame=7, target='footage')])
+        with self.assertRaises(ValueError):
+            correction_options(dict(mode='terrain', terrain_overrides=[dict(foot=2, frame=7, target='footage')]))
+
+    def test_wireframe(self):
+        from mocap.scene_import.terrain import wireframe
+        lines = wireframe(self.hf, spacing=1.0, step=0.5)
+        self.assertGreater(len(lines), 100)
+        np.testing.assert_allclose(lines[..., 1], 0.5, atol=1e-9)
+
+
 def Rotation_from_matrix(m):
     from scipy.spatial.transform import Rotation
     return Rotation.from_matrix(m).as_rotvec()

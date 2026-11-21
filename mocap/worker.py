@@ -154,7 +154,7 @@ def main() -> int:
     parser.add_argument('--correction-preset',choices=list(PRESETS),default='normal')
     parser.add_argument('--foot-lock',type=int,choices=(0,1),default=1)
     parser.add_argument('--hand-lock',type=int,choices=(0,1),default=0)
-    parser.add_argument('--correction-mode',choices=['flat','multi_level'],default='flat')
+    parser.add_argument('--correction-mode',choices=['flat','multi_level','terrain'],default='flat')
     parser.add_argument('--pelvis-offset',type=float,default=0.)
     args = parser.parse_args()
     from .model_session import set_memory_budget
@@ -192,7 +192,9 @@ def main() -> int:
                 manifest["pipeline"] = {"model": args.motion_tool or "gvhmr", "result": args.result,
                                         "htd_refine": result_options(args.result)[0], "footmr": result_options(args.result)[1], 'handflow':has_handflow(args.result)}
                 if args.result.startswith('corrected_'):
-                    manifest['correction']={'auto_floor':args.floor is None,'floor':float(args.floor or 0),'preset':args.correction_preset,'pelvis_offset':args.pelvis_offset,'mode':args.correction_mode,'foot_lock':bool(args.foot_lock),'hand_lock':bool(args.hand_lock)}
+                    kept=manifest.get('correction',{}).get('terrain_overrides',[]) if args.correction_mode=='terrain' else None
+                    manifest['correction']={'auto_floor':args.floor is None,'floor':float(args.floor or 0),'preset':args.correction_preset,'pelvis_offset':args.pelvis_offset,'mode':args.correction_mode,'foot_lock':bool(args.foot_lock),'hand_lock':bool(args.hand_lock),
+                                            **({'terrain_overrides':kept} if kept is not None else {})}
             atomic_json(project / "project.json", manifest)
             emit("prepared", project=str(project), manifest={k: v for k, v in manifest.items() if k != "original_times"})
             return 0

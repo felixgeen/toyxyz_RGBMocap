@@ -17,7 +17,7 @@ DESCRIPTIONS = {
     'strong': 'Firmer holds: keeps lower-confidence contacts and bridges brief grounded dropouts. Stable contacts use full position holds; automatic travel handoffs remain smooth. Avoid deliberate foot slides; inferred foot rotation is retained.',
 }
 
-MODES = {'flat': 'Flat Ground', 'multi_level': 'Multi Level'}
+MODES = {'flat': 'Flat Ground', 'multi_level': 'Multi Level', 'terrain': 'Pre-calculated Mesh'}
 MODE_HELP = ('Flat Ground uses one correction floor. Multi Level keeps source elevation and locks each stance at its own 3D position. '
              'Use for stairs, slopes and climbing. It preserves inferred distal rotations and does not reconstruct terrain. Overhead hand contacts require manual timing.')
 
@@ -37,7 +37,11 @@ def correction_options(options=None):
     pelvis = float(options.get('pelvis_offset', 0.))
     if not math.isfinite(pelvis) or abs(pelvis) > .25:
         raise ValueError('Pelvis height offset must be between -0.25 and +0.25 meters')
-    return {'auto_floor': auto, 'floor': floor, 'preset': preset, 'pelvis_offset': pelvis, 'mode':mode, 'foot_lock':bool(options.get('foot_lock',True)), 'hand_lock':bool(options.get('hand_lock',False))}
+    result = {'auto_floor': auto, 'floor': floor, 'preset': preset, 'pelvis_offset': pelvis, 'mode':mode, 'foot_lock':bool(options.get('foot_lock',True)), 'hand_lock':bool(options.get('hand_lock',False))}
+    if mode=='terrain':
+        from .scene_import.contacts import normalize_overrides
+        result['terrain_overrides']=normalize_overrides(options.get('terrain_overrides'))
+    return result
 
 
 def effective_options(project,state):

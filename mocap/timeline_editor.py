@@ -13,6 +13,7 @@ class TimelineSlider(FootLockEditor,QSlider):
     contacts_edit_started=Signal()
     contacts_reset=Signal()
     contacts_preview_changed=Signal()
+    terrain_target_changed=Signal(int,int,object)  # foot, frame, 'terrain' | 'footage' | None (automatic)
     LEFT, RIGHT = 64, 14
     TRACK_HEIGHT = 26
     RULER_HEIGHT = 25

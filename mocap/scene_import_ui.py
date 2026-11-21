@@ -161,6 +161,9 @@ class SceneImportWorkspace:
             self.precalc_plate_fps.setValue(preview['plate_fps'])
             rng = preview.get('file_frame_range') or [0, 0]
             self.precalc_first_frame.setValue(int(rng[0]))
+        if first and preview.get('mesh'):
+            # A terrain makes Pre-calculated Mesh the right correction; Flat Ground would flatten a slope.
+            self.correction_mode.setCurrentIndex(self.correction_mode.findData('terrain'))
         check = preview['scale_check']
         self.precalc_scale.clear()
         self.precalc_scale.addItem('1 (as in file)', 1.0)
@@ -229,3 +232,44 @@ class SceneImportWorkspace:
     def precalc_import_environment(self):
         options = self.precalc_import_options()
         return json.dumps(options) if options else ''
+
+    # ---- Pre-calculated Mesh correction: per-contact Terrain / Footage targets on the timeline
+    def _contact_range(self, foot, frame):
+        for first, end in (self.slider.contacts[foot] if foot < len(self.slider.contacts) else []):
+            if first <= frame < end:
+                return first, end
+        return frame, frame + 1
+
+    def terrain_target_lookup(self, foot, frame):
+        first, end = self._contact_range(foot, frame)
+        hits = [r['target'] for r in getattr(self, 'terrain_overrides', []) if r['foot'] == foot and first <= r['frame'] < end]
+        return hits[-1] if hits else None
+
+    def set_terrain_target(self, foot, frame, target):
+        first, end = self._contact_range(foot, frame)
+        rows = [r for r in getattr(self, 'terrain_overrides', []) if not (r['foot'] == foot and first <= r['frame'] < end)]
+        if target is not None:
+            rows.append(dict(foot=int(foot), frame=int((first + end - 1) // 2), target=target))
+        self.terrain_overrides = rows
+        self.save_correction_options()
+        side = 'Left' if foot == 0 else 'Right'
+        what = {'terrain': 'locks to the terrain', 'footage': 'keeps the footage height', None: 'uses the automatic target'}[target]
+        self.status.setText(f'{side} foot contact at frames {first + 1}-{end}: {what}. Click Apply Correction to update the motion.')
+        self.update_readiness()
+
+    def terrain_targets_mode_changed(self, *_):
+        self.slider.terrain_targets = self.terrain_target_lookup if self.correction_mode.currentData() == 'terrain' else None
+
+    def precalc_project_loaded(self, project):
+        """Show the imported terrain in the 3D view for projects with a Pre-calculated Camera scene."""
+        self.motion_view.terrain_lines = None
+        try:
+            from .scene_import.reader import load
+            from .scene_import.terrain import Heightfield, wireframe
+            scene = load(project) if project is not None else None
+            if scene is not None and 'mesh_vertices' in scene[0]:
+                hf = Heightfield(scene[0]['mesh_vertices'], scene[0]['mesh_faces'], cell=0.1)
+                self.motion_view.terrain_lines = wireframe(hf)
+        except (OSError, ValueError, KeyError) as error:
+            self.log.append('Scene terrain preview unavailable: ' + str(error))
+        self.motion_view.update()

@@ -64,6 +64,7 @@ class MotionView(ViewportBase):
         # The grid is a world reference, not the solved contact plane. Moving
         # it with correction concealed manual world-Y changes completely.
         self.grid_floor = 0.0
+        self.terrain_lines = None  # (n,2,3) wireframe of an imported terrain, world coordinates
         self._camera_project = None
         self._camera_initialized = False
         self.body_height = 1.7
@@ -854,6 +855,8 @@ class MotionView(ViewportBase):
         painter.setRenderHint(QPainter.Antialiasing, True)
         if self.live_active:
             painter.setPen(QColor("#dddddd"));painter.drawText(self.rect(),Qt.AlignCenter|Qt.TextWordWrap,self.live_message);painter.end();return
+        if self.terrain_lines is not None and self.show_grid:
+            lines3d(self.terrain_lines, "#5f9b62", .8)
         correction_plane_visible=self.draw_correction_floor(painter,lines3d)
         self.name_labels_presented=[]
         bone_actors=[]

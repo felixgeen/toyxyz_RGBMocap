@@ -222,6 +222,7 @@ def build_workspace(w):
     w.slider.contacts_edit_started.connect(w.stop_playback)
     w.slider.contacts_changed.connect(w.foot_contacts_changed)
     w.slider.contacts_reset.connect(w.reset_foot_contacts)
+    w.slider.terrain_target_changed.connect(w.set_terrain_target)
     timeline_panel, timeline_header = editor("Timeline", w.slider)
     w.timeline_panel = timeline_panel
     timeline_panel.setMinimumHeight(260)
@@ -477,6 +478,7 @@ def build_workspace(w):
     for key,label in MODES.items():w.correction_mode.addItem(label,key)
     w.correction_mode.setToolTip(tooltip_text('Flat Ground uses one floor height. Multi Level keeps each contact at its inferred height for stairs or slopes. It does not reconstruct the surfaces. Apply Correction to update.'))
     contact.addWidget(w.correction_mode)
+    w.correction_mode.currentIndexChanged.connect(w.terrain_targets_mode_changed)
     locks=QHBoxLayout();contact.addLayout(locks)
     w.foot_lock=QCheckBox('Foot');w.foot_lock.setChecked(True)
     w.hand_lock=QCheckBox('Hand');w.hand_lock.setChecked(False)

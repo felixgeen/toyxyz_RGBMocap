@@ -37,8 +37,28 @@ def size_factor(scales, weights):
     return k, dict(samples=int(len(s)), kept=int(keep.sum()), spread=float(np.exp(mad) - 1))
 
 
+def per_frame_depth(n, frames, scales, weights, k, fps, smooth_seconds=0.3, limit=1.2):
+    """Per-frame depth factor: the stance rays' weighted median per frame, interpolated through swing frames and
+    smoothed. GVHMR's depth wobbles from frame to frame; the size factor k alone can't remove that, so feet would
+    sink into or float above the terrain. Clamped to k/limit .. k*limit, so one bad frame can't throw the body."""
+    from scipy.ndimage import gaussian_filter1d
+    # A ray that grazes a ridge or passes a hole in the scan hits terrain far behind the foot: those samples are
+    # outliers, not depth. Only samples within `limit` of the actor's size factor count; the rest interpolate.
+    ok = np.isfinite(scales) & (np.abs(np.log(np.maximum(scales, 1e-9) / k)) <= np.log(limit))
+    have, values = [], []
+    for t in np.unique(frames[ok]):
+        sel = ok & (frames == t)
+        have.append(t)
+        values.append(np.log(weighted_median(scales[sel], weights[sel])))
+    if not have:
+        return np.full(n, k)
+    log_k = np.interp(np.arange(n), have, values)
+    log_k = gaussian_filter1d(log_k, max(1.0, smooth_seconds * fps), mode='nearest')
+    return np.clip(np.exp(log_k), k / limit, k * limit)
+
+
 def place(orient_c, transl_c, rest_root, probes_c, probabilities, world_to_camera, heightfield,
-          model_height=None, actor_height=None):
+          model_height=None, actor_height=None, per_frame=True, fps=30.0):
     """World-frame global_orient/transl for a camera-frame body, plus a report. All arrays per working frame.
 
     orient_c (n,3) axis-angle and transl_c (n,3): smpl_params_incam (OpenCV camera frame).
@@ -64,17 +84,19 @@ def place(orient_c, transl_c, rest_root, probes_c, probabilities, world_to_camer
     warning = ''
     if k is None:
         k, warning = 1.0, 'No stance foot reached the terrain mesh, so the actor keeps the model depth (k = 1).'
+    depth = per_frame_depth(n, t_idx, scales, probabilities[t_idx, p_idx], k, fps) if per_frame else np.full(n, k)
     pelvis_c = transl_c + rest_root
-    root_w = np.einsum('tij,tj->ti', R, k * pelvis_c) + C
+    root_w = np.einsum('tij,tj->ti', R, depth[:, None] * pelvis_c) + C
     transl_w = root_w - rest_root
     orient_w = Rotation.from_matrix(R @ Rotation.from_rotvec(orient_c).as_matrix()).as_rotvec()
     # Foot-to-terrain distance in stance frames after placement (the body keeps its size, so this is not zero).
-    feet_w = np.einsum('tij,tpj->tpi', R, k * pelvis_c[:, None] + (probes_c - pelvis_c[:, None])) + C[:, None]
+    feet_w = np.einsum('tij,tpj->tpi', R, depth[:, None, None] * pelvis_c[:, None] + (probes_c - pelvis_c[:, None])) + C[:, None]
     gap = feet_w[..., 1] - heightfield.height(feet_w[..., 0], feet_w[..., 2])
     stance_gap = np.abs(gap[stance])
     lowest = np.where(stance, gap, np.inf).min(1)
     lowest = lowest[np.isfinite(lowest)]
     report = dict(size_factor=k, size_check=scale_check.size_factor_check(k, model_height, actor_height),
+                  per_frame_depth=bool(per_frame), depth_factor_range=[float(depth.min()), float(depth.max())],
                   model_height_m=model_height, actor_height_m=actor_height, stance_frames=int(stance.any(1).sum()),
                   frames=n, rays=stats, warning=warning,
                   stance_gap_median_cm=float(np.median(stance_gap) * 100) if len(stance_gap) else None,

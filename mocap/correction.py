@@ -174,7 +174,7 @@ def sole_metrics(before,after,probabilities,active,anchors,segments,fps,preset,f
         short_contact_segments=int(sum(s['end']-s['start']<max(2,round(fps*.1)) for s in segments)))
 
 
-def prepare_contacts(probes, probabilities, fps, floor=None, preset='normal', contact_ranges=None,mode='flat'):
+def prepare_contacts(probes, probabilities, fps, floor=None, preset='normal', contact_ranges=None,mode='flat',terrain=None):
     """Resolve contact phases and grounded sole anchors once, before windowing.
 
 Static confidence is not ground truth. Reject raised/moving feet, preserve
@@ -189,7 +189,16 @@ airborne intervals, and split anchors when the source intentionally travels.
     if np.any(probabilities<0) or np.any(probabilities>1):raise ValueError('Contact probabilities must be in [0,1]')
     if mode=='multi_level':
         from .multilevel_contacts import prepare
-        return prepare(probes,probabilities,fps,preset,contact_ranges)
+        if terrain is not None and contact_ranges is None:
+            # Pre-calculated Mesh: time contacts with the terrain too, not only from foot speed.
+            from .scene_import.contacts import detect_ranges
+            contact_ranges=terrain['automatic_ranges']=detect_ranges(probes,probabilities,terrain['heightfield'],fps)
+        plan=prepare(probes,probabilities,fps,preset,contact_ranges)
+        if terrain is not None:
+            # Pre-calculated Mesh: Multi Level stances, each locked to the terrain or kept at the footage height.
+            from .scene_import.contacts import apply
+            terrain['summary']=apply(plan[1],plan[5],terrain['heightfield'],terrain.get('overrides',()))
+        return plan
     if mode!='flat':raise ValueError('Unknown correction mode: '+str(mode))
     height=probes[...,1].reshape(n,2,2).min(2)
     points=probes.reshape(n,2,2,3).mean(2)
@@ -290,7 +299,7 @@ airborne intervals, and split anchors when the source intentionally travels.
     return active,anchors,offsets,shift,floor,segments
 
 
-def correct_arrays(rest, root, quat, probes, probabilities, fps=30., floor=None, core=CORE, output=None, emit=lambda *a,**k:None, preset='normal',contact_ranges=None,pelvis_offset=0.,mode='flat',foot_enabled=True):
+def correct_arrays(rest, root, quat, probes, probabilities, fps=30., floor=None, core=CORE, output=None, emit=lambda *a,**k:None, preset='normal',contact_ranges=None,pelvis_offset=0.,mode='flat',foot_enabled=True,terrain=None):
     from .correction_settings import correction_options
     pelvis_offset=correction_options({'pelvis_offset':pelvis_offset})['pelvis_offset']
     n=len(root)
@@ -302,12 +311,12 @@ def correct_arrays(rest, root, quat, probes, probabilities, fps=30., floor=None,
     if any(np.linalg.norm(rest[b]-rest[a])<1e-6 for a,b in ((1,4),(4,7),(2,5),(5,8))):
         raise ValueError('Leg bone lengths must be nonzero')
     from .foot_contacts import segment_ranges
-    plan=prepare_contacts(probes,probabilities,fps,floor,preset,mode=mode)
+    plan=prepare_contacts(probes,probabilities,fps,floor,preset,mode=mode,terrain=terrain)
     automatic_ranges=segment_ranges(plan[5]) if foot_enabled else [[],[]]
     if not foot_enabled:contact_ranges=[[],[]]
     if contact_ranges is not None:
         del plan
-        plan=prepare_contacts(probes,probabilities,fps,floor,preset,contact_ranges,mode)
+        plan=prepare_contacts(probes,probabilities,fps,floor,preset,contact_ranges,mode,terrain=terrain)
     active,anchors,sole_points,shift,floor,segments=plan
     out_root,out_quat=output if output is not None else (np.empty_like(root),np.empty_like(quat))
     if n==1:
@@ -449,7 +458,7 @@ def correct_arrays(rest, root, quat, probes, probabilities, fps=30., floor=None,
         rotation_error=max(rotation_error,float(np.rad2deg(Rotation.from_matrix(delta[keep].reshape(-1,3,3)).magnitude()).max()))
         out_root[start:end]=r[keep];out_quat[start:end]=q[keep]
         emit('progress',stage='correct',current=end,total=n,message='Motion Correction: stabilizing ground contacts')
-    report={'version':VERSION,'preset':preset,'mode':mode,'automatic_ranges':automatic_ranges,'frames':n,'fps':fps,'floor':floor,'core_frames':core,'halo_frames':halo,
+    report={'version':VERSION,'preset':preset,'mode':mode,**({'terrain':terrain.get('summary')} if terrain is not None else {}),'automatic_ranges':automatic_ranges,'frames':n,'fps':fps,'floor':floor,'core_frames':core,'halo_frames':halo,
         'native_seconds':native_seconds,'contacts':int(active.sum()),'segments':segments,
         'max_root_y_offset_m':float(np.abs(shift[:,1]).max()),'max_root_xz_offset_m':float(np.linalg.norm(shift[:,[0,2]],axis=1).max()),'max_contact_goal_error_m':max_goal_error,
         'max_reach_pelvis_drop_m':float(automatic_drop.max()),
@@ -584,6 +593,11 @@ def run(project,emit,result):
     group=scene_root(project,manifest)
     if group is not None:ensure_config(group)
     options=effective_options(project,manifest)
+    requested=options
+    terrain=None
+    if options['mode']=='terrain':
+        from .scene_import.contacts import context
+        terrain=context(project);options={**options,'mode':'multi_level'}
     shared=binding(project,manifest,body)
     transform=np.asarray(shared['local_to_shared']) if shared else np.eye(4)
     shared_rotation,shared_translation=transform[:3,:3],transform[:3,3]
@@ -634,7 +648,7 @@ def run(project,emit,result):
                     probes[start:end]=geometry.sample(roots[start:end],quats[start:end])[0]
                 _,_,report=correct_arrays(geometry.rest[:22],roots,quats,probes,probabilities,fps,floor,
                     output=(out_roots,out_quats),emit=emit,preset=preset,contact_ranges=contact_ranges,
-                    pelvis_offset=options['pelvis_offset'],mode=options['mode'],foot_enabled=options['foot_lock'])
+                    pelvis_offset=options['pelvis_offset'],mode=options['mode'],foot_enabled=options['foot_lock'],terrain=terrain)
                 from .hand_lock import apply as apply_hands
                 report['hand_lock']=apply_hands(geometry.rest[:22],roots,quats,out_roots,out_quats,geometry.palm_offsets,fps,options['mode'],report['floor'],preset,hand_ranges,options['hand_lock'],emit)
                 report['warning']=' '.join(filter(None,(report['warning'],report['hand_lock']['warning'])))
@@ -649,7 +663,7 @@ def run(project,emit,result):
                     translation[start:end]=(out_roots[start:end]-shared_translation)@shared_rotation-geometry.rest[0]
                     after[start:end]=geometry.sample(out_roots[start:end],out_quats[start:end])[0]
                 before=probes
-                contact_plan=prepare_contacts(probes,probabilities,fps,floor,preset,contact_ranges,options['mode'])
+                contact_plan=prepare_contacts(probes,probabilities,fps,floor,preset,contact_ranges,options['mode'],terrain=terrain)
                 active,anchors=contact_plan[:2]
                 from .contact_trajectory import support_weights
                 applied_weights=support_weights(probes,active,fps)
@@ -699,10 +713,10 @@ def run(project,emit,result):
         current=json.loads((project/'project.json').read_text(encoding='utf-8'))
         if (any(file_stat(project/name)!=stamp for name,stamp in sources.items()) or file_stat(model)!=model_stamp
                 or saved_contact_revision(project,base)!=contact_revision or current.get('fps',30)!=fps
-                or effective_options(project,current)!=options or not receipt_matches(project,current,shared)):
+                or effective_options(project,current)!=requested or not receipt_matches(project,current,shared)):
             raise ValueError('Correction inputs changed while processing. Apply Correction again.')
         atomic_json(project/f'{kind}_sources.json',sources)
-        report['source']=base;report['options']=options
+        report['source']=base;report['options']=requested
         report['model_stat']=model_stamp
         report['backend_sha256']=sha256(Path(backend().__file__))
         atomic_json(project/f'{kind}_correction.json',report)
