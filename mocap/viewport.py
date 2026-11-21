@@ -65,6 +65,11 @@ class MotionView(ViewportBase):
         # it with correction concealed manual world-Y changes completely.
         self.grid_floor = 0.0
         self.terrain_lines = None  # (n,2,3) wireframe of an imported terrain, world coordinates
+        self.terrain_mesh = None   # {'key','vertices','normals','faces'}: the full-resolution imported terrain
+        self.show_terrain_proxy = True
+        self.show_terrain_full = False
+        self.terrain_renderer = None
+        self.terrain_error = None
         self._camera_project = None
         self._camera_initialized = False
         self.body_height = 1.7
@@ -476,6 +481,8 @@ class MotionView(ViewportBase):
         self.context().aboutToBeDestroyed.connect(self.cleanup_gl)
 
     def cleanup_gl(self):
+        if self.terrain_renderer is not None:
+            self.makeCurrent();self.terrain_renderer.close();self.terrain_renderer=None;self.doneCurrent()
         self.release_live_renderer()
         self.clear_characters()
         self.release_scene_renderers()
@@ -672,6 +679,22 @@ class MotionView(ViewportBase):
             painter.setPen(QPen(QColor(colors[side]),1.5))
             painter.drawPolygon(QPolygonF([QPointF(*point) for point in xy]))
 
+    def draw_terrain_mesh(self,painter):
+        """Full-resolution imported terrain, after the actor so feet that sink into it are hidden by it."""
+        if not self.show_terrain_full or self.terrain_mesh is None or not OPENGL_VIEW:return
+        painter.beginNativePainting()
+        try:
+            if self.terrain_renderer is None:
+                from .terrain_gl import TerrainRenderer
+                self.terrain_renderer=TerrainRenderer()
+            self.terrain_renderer.load(self.terrain_mesh)
+            self.terrain_renderer.draw(*self._paint_camera,self.width(),self.height())
+            self.terrain_error=None
+        except Exception as error:self.terrain_error='Cannot draw the terrain mesh: '+str(error)
+        finally:painter.endNativePainting()
+        if self.terrain_error:
+            painter.setPen(QColor('#e0b06c'));painter.drawText(18,120,self.terrain_error[:160])
+
     def draw_mesh(self,painter,index):
         if self.native_vertices is not None or self.native_required:
             if self.raw_asset is None or self.native_vertices is None:
@@ -855,7 +878,7 @@ class MotionView(ViewportBase):
         painter.setRenderHint(QPainter.Antialiasing, True)
         if self.live_active:
             painter.setPen(QColor("#dddddd"));painter.drawText(self.rect(),Qt.AlignCenter|Qt.TextWordWrap,self.live_message);painter.end();return
-        if self.terrain_lines is not None and self.show_grid:
+        if self.terrain_lines is not None and self.show_terrain_proxy:
             lines3d(self.terrain_lines, "#5f9b62", .8)
         correction_plane_visible=self.draw_correction_floor(painter,lines3d)
         self.name_labels_presented=[]
@@ -922,6 +945,7 @@ class MotionView(ViewportBase):
             painter.drawText(QRectF(18, 39, self.width() - 36, 20), Qt.AlignLeft, f"Frame {index + 1} / {len(self.joints)}")
             painter.drawText(QRectF(18, 60, self.width() - 36, 20), Qt.AlignLeft,
                              f"X {joints[0, 0]:+.2f}   Z {joints[0, 2]:+.2f} m")
+        self.draw_terrain_mesh(painter)
         if self.show_cameras:
             from .camera_tracks import at,geometry
             for camera,trail in self.camera_records:

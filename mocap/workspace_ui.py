@@ -161,6 +161,16 @@ def build_workspace(w):
     w.bone_overlay.setToolTip(tooltip_text('Show the skeleton used for FBX export over the motion mesh. Display only.'))
     w.bone_overlay.toggled.connect(w.render_changed)
     motion_header.addWidget(w.bone_overlay)
+    w.terrain_full=QCheckBox('Fullres Terrain Mesh')
+    w.terrain_full.setChecked(False)
+    w.terrain_full.setToolTip(tooltip_text('Show the imported terrain mesh at full resolution, shaded. Display only; uses GPU memory for large scans.'))
+    w.terrain_full.toggled.connect(w.terrain_display_changed)
+    motion_header.addWidget(w.terrain_full)
+    w.terrain_proxy=QCheckBox('Proxy Terrain Mesh')
+    w.terrain_proxy.setChecked(True)
+    w.terrain_proxy.setToolTip(tooltip_text('Show a light wireframe of the imported terrain (a line every 0.5 m). Display only.'))
+    w.terrain_proxy.toggled.connect(w.terrain_display_changed)
+    motion_header.addWidget(w.terrain_proxy)
     w.face_overlay=QCheckBox('Face Overlay')
     w.face_overlay.setChecked(w.motion_view.show_faces)
     w.face_overlay.setToolTip(tooltip_text('Show tracked facial landmarks on the motion mesh. Display only.'))
@@ -632,7 +642,8 @@ def build_workspace(w):
     root.addWidget(w.log)
 
     file_menu = w.menuBar().addMenu("File")
-    w.open_actions = [file_menu.addAction("Open Video...", w.choose_video), file_menu.addAction("Open Project...", w.choose_project)]
+    w.open_actions = [file_menu.addAction("Open Video...", w.choose_video), file_menu.addAction("Open Image Sequence...", w.choose_image_sequence),
+                      file_menu.addAction("Open Project...", w.choose_project)]
     w.import_character_action=file_menu.addAction('Import Character...',w.choose_character)
     w.import_character_action.setToolTip('Import a Mixamo FBX, VRM or PMX humanoid. Right-click its People row to retarget a source person.')
     w.save_project_action = file_menu.addAction('Save Project As...', w.save_project_as)

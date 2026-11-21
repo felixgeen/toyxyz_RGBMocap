@@ -126,6 +126,8 @@ class SceneImportWorkspace:
             kwargs.update(info=self.precalc_preview['info'], camera=self.precalc_camera_choice.currentData(),
                           mesh=self.precalc_mesh_choice.currentData() or '', plate_fps=self.precalc_plate_fps.value(),
                           up_axis=self.precalc_up_axis.currentData())
+        elif self.precalc_sequence():
+            kwargs['plate_fps'] = float(self.precalc_sequence()['fps'])
         elif getattr(self, 'info', None) and self.info.get('fps'):
             kwargs['plate_fps'] = float(self.info['fps'])
         self.precalc_status.setText('Reading the scene file...')
@@ -161,6 +163,11 @@ class SceneImportWorkspace:
             self.precalc_plate_fps.setValue(preview['plate_fps'])
             rng = preview.get('file_frame_range') or [0, 0]
             self.precalc_first_frame.setValue(int(rng[0]))
+            sequence = self.precalc_sequence()
+            if sequence:
+                # Plate frame numbers are the scene file's frame numbers (the matchmove was solved on this plate).
+                self.precalc_plate_fps.setValue(float(sequence['fps']))
+                self.precalc_first_frame.setValue(int(sequence['sequence']['first']))
         if first and preview.get('mesh'):
             # A terrain makes Pre-calculated Mesh the right correction; Flat Ground would flatten a slope.
             self.correction_mode.setCurrentIndex(self.correction_mode.findData('terrain'))
@@ -262,14 +269,83 @@ class SceneImportWorkspace:
 
     def precalc_project_loaded(self, project):
         """Show the imported terrain in the 3D view for projects with a Pre-calculated Camera scene."""
-        self.motion_view.terrain_lines = None
+        view = self.motion_view
+        view.terrain_lines = view.terrain_mesh = None
+        self._terrain_source = None
         try:
-            from .scene_import.reader import load
+            from .scene_import.reader import load, NPZ
             from .scene_import.terrain import Heightfield, wireframe
             scene = load(project) if project is not None else None
             if scene is not None and 'mesh_vertices' in scene[0]:
                 hf = Heightfield(scene[0]['mesh_vertices'], scene[0]['mesh_faces'], cell=0.1)
-                self.motion_view.terrain_lines = wireframe(hf)
+                view.terrain_lines = wireframe(hf)
+                stat = (Path(project) / NPZ).stat()
+                self._terrain_source = (scene[0], f'{project}:{stat.st_size}:{stat.st_mtime_ns}')
         except (OSError, ValueError, KeyError) as error:
             self.log.append('Scene terrain preview unavailable: ' + str(error))
-        self.motion_view.update()
+        has = view.terrain_lines is not None
+        for box in (self.terrain_full, self.terrain_proxy):
+            box.setEnabled(has)
+        self.terrain_display_changed()
+
+    def terrain_display_changed(self, *_):
+        view = self.motion_view
+        view.show_terrain_proxy = self.terrain_proxy.isChecked()
+        view.show_terrain_full = self.terrain_full.isChecked()
+        source = getattr(self, '_terrain_source', None)
+        if view.show_terrain_full and source is not None and (view.terrain_mesh is None or view.terrain_mesh['key'] != source[1]):
+            # Full resolution is built on first use: smooth normals for millions of triangles take a few seconds.
+            from PySide6.QtWidgets import QApplication
+            from PySide6.QtCore import Qt as _Qt
+            from .terrain_gl import vertex_normals
+            QApplication.setOverrideCursor(_Qt.WaitCursor)
+            try:
+                arrays = source[0]
+                view.terrain_mesh = dict(key=source[1], vertices=arrays['mesh_vertices'], faces=arrays['mesh_faces'],
+                                         normals=vertex_normals(arrays['mesh_vertices'], arrays['mesh_faces']))
+                self.log.append(f"Terrain mesh: {len(arrays['mesh_faces']):,} triangles at full resolution.")
+            finally:
+                QApplication.restoreOverrideCursor()
+        view.update()
+
+    # ---- Image sequence import
+    def choose_image_sequence(self):
+        from PySide6.QtWidgets import QInputDialog, QMessageBox, QProgressDialog
+        from .image_sequence import FILTER, detect, output_path, encode
+        from .paths import HOME
+        name, _ = QFileDialog.getOpenFileName(self, 'Open Image Sequence (pick any frame)', '', FILTER)
+        if not name:
+            return
+        try:
+            info = detect(name)
+        except ValueError as error:
+            QMessageBox.warning(self, 'Open Image Sequence', str(error))
+            return
+        fps, ok = QInputDialog.getDouble(self, 'Plate Frame Rate',
+                                         f"{info['count']} frames ({info['first']}-{info['last']}). Frame rate of this plate:",
+                                         25.0, 1.0, 240.0, 3)
+        if not ok:
+            return
+        target = output_path(info, fps, HOME / 'cache' / 'image_sequences')
+        if not target.is_file():
+            dialog = QProgressDialog('Encoding the image sequence at full resolution...', 'Cancel', 0, info['count'], self)
+            dialog.setWindowTitle('Open Image Sequence')
+            dialog.setMinimumDuration(0)
+            from PySide6.QtWidgets import QApplication
+            def progress(done, total):
+                dialog.setValue(min(done, total))
+                QApplication.processEvents()
+            try:
+                encode(info, fps, target, progress, dialog.wasCanceled)
+            except ValueError as error:
+                dialog.close()
+                QMessageBox.warning(self, 'Open Image Sequence', str(error))
+                return
+            dialog.close()
+        self.log.append(f"Image sequence: {info['pattern']} frames {info['first']}-{info['last']} at {fps:g} fps -> {target}")
+        self.load_video(target)
+
+    def precalc_sequence(self):
+        """Sidecar info when the open video came from Open Image Sequence."""
+        from .image_sequence import sidecar
+        return sidecar(self.video_path) if getattr(self, 'video_path', None) else None
