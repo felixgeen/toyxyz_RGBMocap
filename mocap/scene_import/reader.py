@@ -156,7 +156,7 @@ def run_stage(project, emit):
     identity = hashlib.sha256(json.dumps([str(path.resolve()), stat.st_size, stat.st_mtime_ns, options,
                                           times.tolist(), manifest['width'], manifest['height']]).encode() + code).hexdigest()
     old = json.loads((project / JSON).read_text(encoding='utf-8')) if (project / JSON).is_file() else {}
-    if old.get('identity') == identity and (project / NPZ).is_file():
+    if old.get('identity') == identity and old.get('options') == options and (project / NPZ).is_file():
         emit('complete', stage='scene_import', output=str(project / NPZ), cached=True)
         return old
     frame_count = int(np.floor(times.max() * plate_fps + 0.5)) + 1
@@ -165,6 +165,7 @@ def run_stage(project, emit):
                           mesh=options.get('mesh'), first_frame=options.get('first_frame'),
                           scale_fix=float(options.get('scale_fix') or 1.0), up_axis=options.get('up_axis'), emit=emit)
     record['identity'] = identity
+    record['options'] = options
     from ..storage import atomic_json
     atomic_json(project / JSON, record)
     check = record['scale_check']

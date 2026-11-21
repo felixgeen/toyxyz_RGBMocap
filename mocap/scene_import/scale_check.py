@@ -90,21 +90,33 @@ def import_check(camera_centres=None, vertices=None, preferred=()):
     return report
 
 
-def size_factor_check(factor):
-    """Judge the size factor that placing the solved body on the terrain needed. factor = scene units per model metre."""
+def size_factor_check(factor, model_height=None, actor_height=None):
+    """Judge the size factor that placing the solved body on the terrain needed (scene distance / model distance).
+
+    model_height: the solved body's standing height in metres. actor_height: the real actor's height, if known.
+    'fix' multiplies the scene scale. height_fix is the fix that makes the actor exactly actor_height (or, when
+    unknown, the model's own estimate) tall in the scene."""
     factor = float(factor)
     if not np.isfinite(factor) or factor <= 0:
-        return dict(status='failed', factor=factor, fix=None, message='The body could not be placed on the terrain.')
+        return dict(status='failed', factor=factor, fix=None, height_fix=None, message='The body could not be placed on the terrain.')
+    target = actor_height or model_height
+    height_fix = (target / model_height) / factor if model_height and target else 1.0 / factor
+    if actor_height:
+        return dict(status='actor_height', factor=factor, fix=height_fix, height_fix=height_fix, message=(
+            f'With the actor {actor_height:.2f} m tall, the scene needs a scale of {height_fix:.3g} '
+            f'(the solved body is {model_height:.2f} m).' if model_height else
+            f'With the actor {actor_height:.2f} m tall, the scene needs a scale of {height_fix:.3g}.'))
     if 1 / SIZE_OK <= factor <= SIZE_OK:
-        return dict(status='ok', factor=factor, fix=None, message='The scene scale matches the actor.')
+        return dict(status='ok', factor=factor, fix=None, height_fix=height_fix, message='The scene scale matches the actor.')
     power = 10.0 ** round(math.log10(factor))
     if power != 1.0 and 1 / UNIT_TOLERANCE <= factor / power <= UNIT_TOLERANCE:
-        return dict(status='unit_error', factor=factor, fix=1.0 / power, message=(
-            f'The actor is about {power:g}x the expected size in this scene, which looks like a unit mismatch. '
+        return dict(status='unit_error', factor=factor, fix=1.0 / power, height_fix=height_fix, message=(
+            f'The actor is about {1 / power:g}x the expected size in this scene, which looks like a unit mismatch. '
             f'Scale the scene by {1 / power:g}?'))
-    return dict(status='badly_scaled', factor=factor, fix=None, message=(
-        f'The actor needs a size factor of {factor:.2f} to fit the terrain. Re-export the scene in real-world '
-        'units, or enter the actor height to set the scale.'))
+    about = f' (the solved body is {model_height:.2f} m tall)' if model_height else ''
+    return dict(status='badly_scaled', factor=factor, fix=None, height_fix=height_fix, message=(
+        f'The scene is not in real-world units: the actor would be {1 / factor:.2f}x their solved size{about}. '
+        f'Re-export the scene in metres, enter the actor height, or use a Scene Scale of {height_fix:.3g}.'))
 
 
 def scale_from_actor_height(actor_height_m, scene_height_units):

@@ -64,8 +64,12 @@ def place_result(project, result, scene, emit=lambda *a, **k: None):
         raise ValueError('Choose a terrain mesh in the scene file: the actor is placed on it.')
     emit('progress', current=0, total=0, message='Placing the actor on the terrain')
     heightfield = Heightfield(arrays['mesh_vertices'], arrays['mesh_faces'])
+    with torch.inference_mode():
+        rest = body(betas=torch.from_numpy(betas[None]).float()).vertices[0].numpy()
+    model_height = float(rest[:, 1].max() - rest[:, 1].min())
+    actor_height = (meta.get('options') or {}).get('actor_height') or None
     orient_w, transl_w, report = place(orient_c, transl_c, rest_root, probes, probabilities,
-                                       arrays['world_to_camera'], heightfield)
+                                       arrays['world_to_camera'], heightfield, model_height, actor_height)
     original = result['smpl_params_global']
     result['smpl_params_global_gvhmr'] = {k: v.clone() for k, v in original.items()}
     placed = {k: v.clone() for k, v in incam.items()}

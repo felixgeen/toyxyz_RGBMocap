@@ -64,13 +64,20 @@ class SceneImportWorkspace:
         self.precalc_plate_fps.setDecimals(3)
         self.precalc_first_frame = QSpinBox()
         self.precalc_first_frame.setRange(-1000000, 1000000)
+        self.precalc_actor_height = QDoubleSpinBox()
+        self.precalc_actor_height.setRange(0, 2.5)
+        self.precalc_actor_height.setDecimals(2)
+        self.precalc_actor_height.setSingleStep(0.01)
+        self.precalc_actor_height.setSuffix(' m')
+        self.precalc_actor_height.setSpecialValueText('Unknown')
         for label, widget, tip in (
                 ('Camera in File', self.precalc_camera_choice, 'The tracked camera to use.'),
                 ('Terrain Mesh', self.precalc_mesh_choice, 'The terrain the feet should stand on. Used by the Pre-calculated Mesh correction mode.'),
                 ('Plate Frame Rate', self.precalc_plate_fps, "The plate's frame rate. The camera is matched to the 30 fps working clip using it."),
                 ('First Plate Frame', self.precalc_first_frame, 'The scene-file frame that matches the first frame of the video.'),
                 ('Up Axis', self.precalc_up_axis, 'Auto detects up from the camera and terrain; many exporters write a different up axis than they declare.'),
-                ('Scene Scale', self.precalc_scale, 'Multiplies the scene to real-world metres. A suggested fix appears when the scene looks wrongly scaled.')):
+                ('Scene Scale', self.precalc_scale, 'Multiplies the scene to real-world metres. A suggested fix appears when the scene looks wrongly scaled, on import and after each Reconstruct 3D.'),
+                ('Actor Height', self.precalc_actor_height, "Optional. The actor's real height sets the scene scale after Reconstruct 3D. Unknown trusts the solved body's height.")):
             title = QLabel(label)
             title.setToolTip(tooltip_text(tip))
             widget.setToolTip(tooltip_text(tip))
@@ -194,7 +201,30 @@ class SceneImportWorkspace:
         return dict(path=str(self.precalc_path.resolve()), camera=self.precalc_camera_choice.currentData(),
                     mesh=self.precalc_mesh_choice.currentData() or None, plate_fps=self.precalc_plate_fps.value(),
                     first_frame=self.precalc_first_frame.value(), up_axis=self.precalc_up_axis.currentData(),
-                    scale_fix=self.precalc_scale_factor())
+                    scale_fix=self.precalc_scale_factor(), actor_height=self.precalc_actor_height.value() or None)
+
+    def precalc_after_solve(self, project):
+        """After GVHMR: show the terrain placement result and offer its scene-scale fix in Scene Scale."""
+        try:
+            report = json.loads((Path(project) / 'scene_place.json').read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            return
+        check = report.get('size_check') or {}
+        lines = [f"Terrain placement: size factor {report['size_factor']:.3f}. " + check.get('message', '')]
+        if report.get('lowest_stance_sole_median_cm') is not None:
+            lines.append(f"Lowest stance sole above the terrain: median {report['lowest_stance_sole_median_cm']:.1f} cm.")
+        fix = check.get('fix') or (check.get('height_fix') if check.get('status') == 'badly_scaled' else None)
+        if fix:
+            current = self.precalc_scale_factor()
+            value = round(current * fix, 4)
+            index = self.precalc_scale.findData(value)
+            if index < 0:
+                self.precalc_scale.addItem(f'{value:g} (after Reconstruct 3D)', value)
+                index = self.precalc_scale.count() - 1
+            self.precalc_scale.setCurrentIndex(index)
+            lines.append(f'Scene Scale is now {value:g}. Run Reconstruct 3D again to apply it.')
+        self.precalc_status.setText('\n'.join(lines))
+        self.log.append(' '.join(lines))
 
     def precalc_import_environment(self):
         options = self.precalc_import_options()

@@ -1862,6 +1862,8 @@ class MainWindow(SceneImportWorkspace,PreviewExportWorkspace,PearWorkspace,GemXW
             self.log.append(self.status.text())
         elif kind == "complete":
             if not event.get('batch_inner'):self.task_state.cached|=bool(event.get('cached',False))
+            if event.get('stage')=='gvhmr' and self.job_project is not None and (self.job_project/'scene_place.json').is_file():
+                self.precalc_after_solve(self.job_project)
             self.log.append(f"{STAGES.get(event['stage'])}: {event.get('elapsed', 0):.2f} s · {event.get('output')}")
         self.log.ensureCursorVisible()
 

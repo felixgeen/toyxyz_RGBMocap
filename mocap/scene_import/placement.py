@@ -37,7 +37,8 @@ def size_factor(scales, weights):
     return k, dict(samples=int(len(s)), kept=int(keep.sum()), spread=float(np.exp(mad) - 1))
 
 
-def place(orient_c, transl_c, rest_root, probes_c, probabilities, world_to_camera, heightfield):
+def place(orient_c, transl_c, rest_root, probes_c, probabilities, world_to_camera, heightfield,
+          model_height=None, actor_height=None):
     """World-frame global_orient/transl for a camera-frame body, plus a report. All arrays per working frame.
 
     orient_c (n,3) axis-angle and transl_c (n,3): smpl_params_incam (OpenCV camera frame).
@@ -73,7 +74,8 @@ def place(orient_c, transl_c, rest_root, probes_c, probabilities, world_to_camer
     stance_gap = np.abs(gap[stance])
     lowest = np.where(stance, gap, np.inf).min(1)
     lowest = lowest[np.isfinite(lowest)]
-    report = dict(size_factor=k, size_check=scale_check.size_factor_check(k), stance_frames=int(stance.any(1).sum()),
+    report = dict(size_factor=k, size_check=scale_check.size_factor_check(k, model_height, actor_height),
+                  model_height_m=model_height, actor_height_m=actor_height, stance_frames=int(stance.any(1).sum()),
                   frames=n, rays=stats, warning=warning,
                   stance_gap_median_cm=float(np.median(stance_gap) * 100) if len(stance_gap) else None,
                   stance_gap_p95_cm=float(np.percentile(stance_gap, 95) * 100) if len(stance_gap) else None,
